@@ -1,0 +1,9 @@
+{
+  "_comment": "Groq models and list prices used for the cost estimate. Check https://groq.com/pricing for current values.",
+  "text_model": "openai/gpt-oss-120b",
+  "vision_model": "meta-models/muse-spark-open",
+  "prices_usd_per_million_tokens": {
+    "meta-models/muse-spark-open": {"input": 0.08, "output": 0.40},
+    "openai/gpt-oss-120b": {"input": 0.15, "output": 0.60}
+  }
+}

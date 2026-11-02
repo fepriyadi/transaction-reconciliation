@@ -1,0 +1,6 @@
+{
+  "_comment": "Suppliers and their go-live date. Every document dated within new_supplier_review_days (rules.json) of go-live is reviewed by a person, whether it was read by a layout profile or by the LLM. A supplier not listed here is always reviewed. Add a supplier when its first batch is reconciled.",
+  "suppliers": {
+    "PT PRIMA KERTAS INDONESIA": {"onboarded": "2026-08-01"}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "_comment": "Customer-agreed business rules R1-R5. Change here if the tax regime changes; no code change needed.",
+  "dpp_factor": "11/12",
+  "ppn_rate": "12/100",
+  "total_tolerance": 10,
+  "tax_rounding_tolerance": 10,
+  "auto_approve_min_confidence": 0.9,
+  "new_supplier_review_days": 31
+}

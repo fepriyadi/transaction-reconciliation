@@ -1,0 +1,32 @@
+{
+  "_comment": "Header synonyms per field. Sheets are classified by which fields their header row contains, so sheet names and column order don't matter.",
+  "header_fields": {
+    "entry_id":  ["Entry ID", "Entry", "Document ID", "Doc ID"],
+    "vendor":    ["Vendor", "Vendor Name", "Supplier", "Supplier Name"],
+    "doc_no":    ["Vendor Inv. No", "Vendor Invoice No", "Vendor CN No", "Vendor Doc No", "Supplier Invoice No", "Invoice No"],
+    "doc_date":  ["Doc Date", "Document Date", "Invoice Date"],
+    "po_no":     ["PO No", "PO Number", "Purchase Order"],
+    "reference": ["Original Invoice", "Reference", "Ref Invoice"],
+    "currency":  ["Curr", "Currency"],
+    "subtotal":  ["Subtotal", "Net Amount"],
+    "dpp":       ["DPP", "Tax Base"],
+    "ppn":       ["PPN", "VAT", "Tax Amount"],
+    "total":     ["Grand Total", "Gross Amount", "Total"],
+    "doc_status":["Doc Status", "Status"],
+    "posted_by": ["Posted By", "User"]
+  },
+  "credit_note_markers": ["Vendor CN No", "Original Invoice"],
+  "line_fields": {
+    "entry_id":    ["Entry ID", "Entry", "Document ID"],
+    "line_no":     ["Line", "Line No", "Item No"],
+    "sku":         ["Item Code", "SKU", "Material"],
+    "description": ["Item Description", "Description"],
+    "qty":         ["Qty", "Quantity"],
+    "uom":         ["UoM", "Unit"],
+    "unit_price":  ["Unit Price", "Price"],
+    "disc_pct":    ["Disc %", "Discount %", "Disc"],
+    "amount":      ["Line Amount", "Amount", "Net Value"]
+  },
+  "decimal_separator": ".",
+  "text_date_order": "MDY"
+}

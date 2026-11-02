@@ -1,0 +1,42 @@
+{
+  "name": "PT Prima Kertas Indonesia",
+  "vendor_name": "PT PRIMA KERTAS INDONESIA",
+  "erp_vendor_names": ["PT PRIMA KERTAS INDONESIA"],
+  "detect": ["PRIMA KERTAS INDONESIA"],
+  "decimal_separator": ",",
+  "date_order": "DMY",
+  "page_height": 842,
+  "layout": {
+    "doc_types": {
+      "CREDIT_NOTE": ["NOTA KREDIT", "CREDIT NOTE"],
+      "INVOICE": ["FAKTUR", "INVOICE"]
+    },
+    "header_fields": {
+      "doc_no":   {"labels": ["No. Faktur / Invoice No.", "Invoice No"], "pattern": "[A-Z]{2,5}/[A-Z]{2,4}/\\d{4}/\\d{2}/\\d{3,5}"},
+      "doc_date": {"labels": ["Tanggal / Date", "Tanggal"],              "pattern": "\\d{1,2}[-/.]\\d{1,2}[-/.]\\d{4}"},
+      "due_date": {"labels": ["Jatuh Tempo / Due Date", "Jatuh Tempo"],  "pattern": "\\d{1,2}[-/.]\\d{1,2}[-/.]\\d{4}"},
+      "po_no":    {"labels": ["No. PO"],                                 "pattern": "PO-\\d+"},
+      "reference":{"labels": ["Referensi / Reference", "Referensi"],     "pattern": "[A-Z]{2,5}/[A-Z]{2,4}/\\d{4}/\\d{2}/\\d{3,5}"}
+    },
+    "table": {
+      "header_keywords": ["Kode", "Qty", "Disc"],
+      "sku_header": "Kode",
+      "stop_markers": ["Pembayaran ke"],
+      "row_reach": 14,
+      "right_fields": [
+        {"name": "qty",        "type": "number"},
+        {"name": "uom",        "type": "alpha"},
+        {"name": "unit_price", "type": "number"},
+        {"name": "disc_pct",   "type": "percent", "optional": true},
+        {"name": "amount",     "type": "number"}
+      ]
+    },
+    "totals": {
+      "subtotal": {"labels": ["Subtotal"]},
+      "dpp":      {"labels": ["DPP"]},
+      "ppn":      {"labels": ["PPN"]},
+      "total":    {"labels": ["TOTAL"]}
+    },
+    "footer_margin": 45
+  }
+}
