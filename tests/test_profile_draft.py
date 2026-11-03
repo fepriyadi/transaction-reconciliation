@@ -255,6 +255,10 @@ def test_confirmed_draft_is_saved_and_the_next_run_reads_the_layout_with_boxes(s
 def test_saved_supplier_is_registered_once_and_held_for_review(config_dir, tmp_path):
     conf = tmp_path / "config"
     shutil.copytree(config_dir, conf)
+    reg_file = conf / "supplier_register.json"       # start from a register without Sagara, whatever the live one holds
+    data = json.loads(reg_file.read_text())
+    data["suppliers"].pop(ERP_NAME, None)
+    reg_file.write_text(json.dumps(data))
     before = load_register(conf)
     assert before.review_reason(ERP_NAME, date(2026, 11, 10)).endswith("treated as a new supplier.")
 
