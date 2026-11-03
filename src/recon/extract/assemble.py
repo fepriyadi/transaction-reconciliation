@@ -61,8 +61,8 @@ def assemble(parses: list[PageParse], file: str, date_order: str = "DMY") -> tup
         cur.extraction_notes.extend(pp.notes)
         logs.append(log)
 
-    for d in docs:
-        _post_checks(d)
+    for doc in docs:
+        _post_checks(doc)
     return docs, logs
 
 

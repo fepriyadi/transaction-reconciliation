@@ -7,14 +7,18 @@ document); otherwise it is flagged for a person.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from ..config import SupplierProfile
+from ..llm import PageReader
 from ..models import SourceRef
 from .llm_reader import parse_page_from_llm
 from .page import PageParse, page_self_consistent
 from .profile_parser import page_profile, parse_page_with_profile
 from .words import OCR_PREFILTERS, Word, ocr_words, page_png, page_text
+
+log = logging.getLogger(__name__)
 
 
 def compare_parses(a: PageParse, b: PageParse) -> list[str]:
@@ -67,7 +71,8 @@ def best_ocr_read(page, profiles: list[SupplierProfile], prev_profile: Optional[
     return pp, words, prof, error
 
 
-def second_read_scanned(ocr_pp: PageParse, page, page_no: int, file: str, llm, profile: SupplierProfile) -> PageParse:
+def second_read_scanned(ocr_pp: PageParse, page, page_no: int, file: str, llm: PageReader,
+                        profile: SupplierProfile) -> PageParse:
     """Scanned page: compare OCR read with an LLM vision read.
 
     Agreement -> high confidence. Disagreement -> keep the read whose own
@@ -77,6 +82,7 @@ def second_read_scanned(ocr_pp: PageParse, page, page_no: int, file: str, llm, p
     try:
         data, usage = llm.extract_page_image(page_png(page, 150))
     except Exception as e:  # network / quota: fall back to OCR only
+        log.warning("%s p.%d: LLM vision read failed (%s: %s); OCR only", file, page_no, type(e).__name__, e)
         ocr_pp.notes.append(f"LLM vision read failed ({type(e).__name__}); OCR only")
         return ocr_pp
     vis = parse_page_from_llm(data, page_no, file, "llm_vision", profile.vendor_name)

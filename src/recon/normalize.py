@@ -121,6 +121,9 @@ _DATE_PATTERNS = [
     (re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})"), "ymd"),
     (re.compile(r"^(\d{1,2})[-./](\d{1,2})[-./](\d{4})$"), "dmy_or_mdy"),
 ]
+_DATE_MONTH_NAME = re.compile(r"^(\d{1,2})[\s-]+([A-Za-z]{3,9})\.?[\s-]+(\d{4})$")     # 02 Oct 2026, 2-Okt-2026
+_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "mei": 5, "jun": 6, "jul": 7, "aug": 8, "agu": 8,
+           "agt": 8, "sep": 9, "oct": 10, "okt": 10, "nov": 11, "dec": 12, "des": 12}     # English and Indonesian
 
 
 def parse_date(raw, order: str = "DMY") -> tuple[Optional[date], bool]:
@@ -133,6 +136,10 @@ def parse_date(raw, order: str = "DMY") -> tuple[Optional[date], bool]:
     if isinstance(raw, date):
         return raw, False
     s = str(raw).strip()
+    m = _DATE_MONTH_NAME.match(s)
+    if m:
+        month = _MONTHS.get(m.group(2).lower()[:3])     # a written month is never ambiguous
+        return (_safe_date(int(m.group(3)), month, int(m.group(1))) if month else None), False
     for pat, kind in _DATE_PATTERNS:
         m = pat.match(s)
         if not m:

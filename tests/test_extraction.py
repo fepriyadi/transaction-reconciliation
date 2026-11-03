@@ -129,3 +129,12 @@ def test_llm_summary_guard_rejects_invented_numbers():
     assert unsupported_numbers("About Rp 17.2 million is at risk.", facts) == {"17.2~scaled"}
     assert unsupported_numbers("About Rp 17 million is at risk.", facts) == {"17~scaled"}
     assert unsupported_numbers("We saved Rp 20,000,000.", facts) == {"20000000"}
+
+
+def test_header_value_glued_to_its_label_by_ocr_is_still_found(config_dir):
+    pp = _page(config_dir, [
+        (40, ["PT", "PRIMA", "KERTAS", "INDONESIA"], 50), (60, ["FAKTUR", "/", "INVOICE"], 400),
+        (120, ["No.", "Faktur", "/", "Invoice", "No.PKI/INV/2026/10/0203"], 310),
+        (138, ["Tanggal/Date02-10-2026"], 310),
+    ])
+    assert pp.doc_no == "PKI/INV/2026/10/0203" and pp.header["doc_date"].value == "02-10-2026"

@@ -1,14 +1,13 @@
-import sys
+import shutil
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+from recon.models import Document, Line
+from recon.rules import expected_totals, line_amount
 
-from recon.models import Document, Line  # noqa: E402
-from recon.rules import expected_totals, line_amount  # noqa: E402
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def mkline(sku, qty, price, disc=0, amount=None, line_no=None, uom="PCS", desc=""):
@@ -39,3 +38,13 @@ def data_dir():
 @pytest.fixture
 def config_dir():
     return ROOT / "config"
+
+
+@pytest.fixture(scope="session")
+def september_batch():
+    """The September 2026 sample run once, deterministic path (no LLM); shared by every test that reads it."""
+    if shutil.which("tesseract") is None:
+        pytest.skip("tesseract not installed (needed for scanned p.10)")
+    from recon.pipeline import run_batch
+    return run_batch([ROOT / "data/Supplier_Invoices_PT_Prima_Kertas_Sep2026.pdf"],
+                     ROOT / "data/ERP_AP_Export_Sep2026.xlsx", ROOT / "config", llm=None)

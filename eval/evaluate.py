@@ -1,7 +1,7 @@
 """Evaluation harness. Writes eval/RESULTS.md.
 
-    python eval/evaluate.py            # all three suites (OCR stress takes ~1 min)
-    python eval/evaluate.py --quick    # skip the OCR stress suite
+    recon eval            # all three suites (OCR stress takes ~1 min); same as python eval/evaluate.py
+    recon eval --quick    # skip the OCR stress suite
 
 1. September ground truth  — hand-verified status + cause per document.
 2. ERP mutation suite      — inject one known error into a copy of the ERP export,
@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT))      # for tests.test_september_batch (the ground truth); recon itself is installed
 
 import openpyxl  # noqa: E402
 import pymupdf  # noqa: E402
@@ -283,7 +283,7 @@ def suite_ocr(out: list, llm=None):
     tmp = Path(tempfile.mkdtemp())
     for label, dpi, angle, blur, noise in PROFILES:
         doc = pymupdf.open()
-        for i, page in enumerate(src):
+        for page in src:
             png = _degrade(page, dpi, angle, blur, noise, rnd)
             np_ = doc.new_page(width=page.rect.width, height=page.rect.height)
             np_.insert_image(np_.rect, stream=png)
@@ -305,7 +305,8 @@ def suite_ocr(out: list, llm=None):
                     [(l.sku_key, l.qty, l.unit_price, l.disc_pct, l.amount) for l in td.lines] and d.po_no == td.po_no)
             from recon.rules import check_document, hard_failures
             truth_fail = bool(hard_failures(check_document(td)))
-            caught = d.confidence < 0.9 or (bool(hard_failures(check_document(d))) and not truth_fail) or bool(d.extraction_notes and any("line numbers" in n or "missing" in n for n in d.extraction_notes))
+            caught = (d.confidence < 0.9 or (bool(hard_failures(check_document(d))) and not truth_fail)
+                      or bool(d.extraction_notes and any("line numbers" in n or "missing" in n for n in d.extraction_notes)))
             if same:
                 exact += 1
             elif caught:

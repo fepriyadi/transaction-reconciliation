@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transaction-reconciliation"
+version = "0.1.0"
+description = "Deterministic reconciliation of supplier invoice PDFs against an ERP AP export"
+readme = "README.md"
+requires-python = ">=3.11"
+# pinned in requirements*.txt (also used by the Dockerfile and CI), so there is one list to update
+dynamic = ["dependencies", "optional-dependencies"]
+
+[project.scripts]
+recon = "recon.cli:main"                 # recon run | ui | check | eval
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+optional-dependencies.dev = { file = ["requirements-dev.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# --------------------------------------------------------------------------- tests
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]                     # tests import the package as installed: from src/, never from the repo root
+filterwarnings = [
+    # pymupdf's SWIG bindings, not our code
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
+]
+
+# --------------------------------------------------------------------------- lint
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+extend-exclude = ["output", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+    "E741",   # `l` for a line is this codebase's convention
+    "B905",   # zip over lists that are equal by construction; strict= would turn a bug into a crash mid-batch
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["recon.rules.RuleConfig"]     # frozen dataclass: a safe default argument
+
+[tool.ruff.lint.per-file-ignores]
+"src/recon/erp_loader.py" = ["B023"]     # cell getters are defined and called within the same row
+"src/recon/reason_codes.py" = ["E501"]   # the registry is a table: one code per row
+"eval/*" = ["E702"]
+"tests/*" = ["E702", "E731"]
+
+# --------------------------------------------------------------------------- types
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/recon", "run_batch.py", "tests/fakes.py"]
+mypy_path = "src"     # app.py: Streamlit script, covered by ruff and a headless run
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = ["pytesseract", "pytesseract.*"]
+ignore_missing_imports = true

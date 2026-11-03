@@ -39,6 +39,7 @@ def describe_line_pair(lp: LinePair) -> str:
                 f"is not in the ERP entry.")
     if e is not None and p is None:
         return f"ERP line {e.line_no} {e.sku} ({e.description}) for {fmt_idr(e.amount)} is not on the invoice."
+    assert p is not None and e is not None      # a pair with a side missing returned above
     parts = []
     uom = (p.uom or e.uom or "").upper()
     if "qty" in lp.diffs:
@@ -87,6 +88,7 @@ def explain(r: DocResult, g: DocGroup, cfg: RuleConfig) -> tuple[str, str, str]:
     headline = ""
 
     if r.status == "DUPLICATE_IN_ERP":
+        assert e is not None                     # the status means two or more ERP entries
         ids = ", ".join(d.entry_id for d in r.erp_docs)
         same = all(d.total == e.total and len(d.lines) == len(e.lines) for d in r.erp_docs)
         extra = sum(d.total or 0 for d in r.erp_docs[1:])
@@ -103,6 +105,7 @@ def explain(r: DocResult, g: DocGroup, cfg: RuleConfig) -> tuple[str, str, str]:
         headline = "Same document sent twice by supplier"
 
     if r.status == "MISSING_IN_ERP":
+        assert p is not None
         po = f", {p.po_no}" if p.po_no else ""
         dated = f" dated {p.doc_date:%d %b %Y}" if p.doc_date else ""
         S.append(f"The {_kind(p)} {p.doc_no}{dated}{po} for {fmt_idr(abs(p.total or 0))} "
@@ -114,6 +117,7 @@ def explain(r: DocResult, g: DocGroup, cfg: RuleConfig) -> tuple[str, str, str]:
                      "Do not pay until it is booked and approved.")
         headline = f"Not booked in ERP ({fmt_idr(abs(p.total or 0))})"
     if r.status == "MISSING_IN_PDF":
+        assert e is not None
         st = f", status {e.status_in_source}" if e.status_in_source else ""
         S.append(f"ERP entry {e.entry_id} ({e.doc_no}, {fmt_idr(abs(e.total or 0))}{st}) has no matching "
                  f"supplier document in this PDF batch.")
@@ -152,11 +156,12 @@ def explain(r: DocResult, g: DocGroup, cfg: RuleConfig) -> tuple[str, str, str]:
         elif (p.total or 0) != (e.total or 0) and r.status != "MATCHED_WITHIN_TOLERANCE":
             parts = [(v, BRIDGE_SHORT[k]) for k, v in b.items() if v and k in BRIDGE_SHORT]
             if parts:
-                d = (p.total or 0) - (e.total or 0)
+                delta = (p.total or 0) - (e.total or 0)
                 if len(parts) == 1:
-                    S.append(f"Against ERP entry {e.entry_id} the {_kind(p)} is {fmt_signed(d)}, all from {parts[0][1]}.")
+                    S.append(f"Against ERP entry {e.entry_id} the {_kind(p)} is {fmt_signed(delta)}, "
+                             f"all from {parts[0][1]}.")
                 else:
-                    S.append(f"Against ERP entry {e.entry_id} the {_kind(p)} is {fmt_signed(d)}: "
+                    S.append(f"Against ERP entry {e.entry_id} the {_kind(p)} is {fmt_signed(delta)}: "
                              + " and ".join(f"{fmt_signed(v)} from {lab}" for v, lab in parts) + ".")
 
     # document's own arithmetic
@@ -175,10 +180,10 @@ def explain(r: DocResult, g: DocGroup, cfg: RuleConfig) -> tuple[str, str, str]:
     pdf_unread = [n for d in r.pdf_docs for n in d.unread_notes]
     erp_unread = [n for d in r.erp_docs for n in d.unread_notes]
     pdf_errors = in_group(r.reasons, "pdf_arithmetic")
-    if pdf_errors and not pdf_unread:
+    if pdf_errors and not pdf_unread and p is not None:
         ok_erp = e is not None and not r.checks_for(e).hard
         A.insert(0, f"Do not pay from this {_kind(p)}: ask the supplier for a corrected {_kind(p)} (and tax invoice)."
-                 + (f" The ERP figure ({fmt_idr(e.total)}) follows the rules." if ok_erp else ""))
+                 + (f" The ERP figure ({fmt_idr(e.total)}) follows the rules." if ok_erp and e is not None else ""))
         diff = f" ({fmt_signed(r.difference)})" if r.difference else ""
         headline = headline or f"Supplier's figures don't add up: {code(pdf_errors[0]).short}{diff}"
     if in_group(r.reasons, "erp_arithmetic") and not erp_unread:
@@ -197,11 +202,12 @@ def explain(r: DocResult, g: DocGroup, cfg: RuleConfig) -> tuple[str, str, str]:
         A.append("Check how PPN was calculated on both sides.")
 
     if r.status == "MATCHED_WITHIN_TOLERANCE":
-        S.insert(0, f"All {len(r.line_pairs)} lines agree. Totals differ by {fmt_idr(abs(r.difference))}, "
+        S.insert(0, f"All {len(r.line_pairs)} lines agree. Totals differ by {fmt_idr(abs(r.difference or 0))}, "
                     f"within the IDR {cfg.total_tolerance} rounding tolerance.")
         A.append("Approve for payment; rounding difference only, no correction needed.")
-        headline = f"Rounding difference of {fmt_idr(abs(r.difference))}"
+        headline = f"Rounding difference of {fmt_idr(abs(r.difference or 0))}"
     if r.status == "MATCHED":
+        assert p is not None and e is not None
         what = "credit note" if p.doc_type == "CREDIT_NOTE" else "invoice"
         S.insert(0, f"The {what} agrees with ERP entry {e.entry_id} on all {len(r.line_pairs)} lines, subtotal, "
                     f"PPN and total ({fmt_idr(p.total)}).")
@@ -252,10 +258,10 @@ def _line_actions(r: DocResult) -> list[str]:
         acts.append(f"Check the agreed price/discount for {skus} on the PO. If the ERP is right, ask the supplier for a "
                     f"corrected invoice or credit note of {fmt_idr(abs(total_diff))} (incl. PPN).")
     for lp in lds:
-        if "extra_in_pdf" in lp.diffs:
+        if "extra_in_pdf" in lp.diffs and lp.pdf:
             acts.append(f"Confirm whether '{lp.pdf.description}' ({fmt_idr(lp.pdf.amount)}) was agreed on the PO. "
                         "If yes, add it to the ERP entry; if not, dispute it with the supplier.")
-        if "missing_from_pdf" in lp.diffs:
+        if "missing_from_pdf" in lp.diffs and lp.erp:
             acts.append(f"Confirm whether {lp.erp.sku} was delivered and invoiced; correct the ERP entry if not.")
     acts.append("Pay only the undisputed amount until resolved.")
     return acts

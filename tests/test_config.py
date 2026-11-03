@@ -18,6 +18,9 @@ def test_shipped_config_is_valid(config_dir):
 def test_code_defaults_follow_llm_json(config_dir):
     shipped = json.loads((config_dir / "llm.json").read_text())
     assert (LLMConfig().text_model, LLMConfig().vision_model) == (shipped["text_model"], shipped["vision_model"])
+    assert (LLMConfig().fallback_text_model, LLMConfig().fallback_vision_model) == (
+        shipped["fallback_text_model"], shipped["fallback_vision_model"])
+    assert LLMConfig().profile_max_completion_tokens == shipped["profile_max_completion_tokens"]
 
 
 def _profile_dir(tmp_path, config_dir, change):
@@ -35,6 +38,9 @@ def _profile_dir(tmp_path, config_dir, change):
     (lambda d: d["layout"]["header_fields"]["doc_no"].update(pattern="[A-Z"), "invalid regex"),
     (lambda d: d["layout"]["table"]["right_fields"].pop(), "amount"),
     (lambda d: d.update(detect=[]), "detect"),
+    (lambda d: d["layout"]["header_fields"]["doc_no"].update(labels=[""]), "empty label matches every row"),
+    (lambda d: d["layout"]["table"].update(sku_header="#"), "sku_header must be the one word"),
+    (lambda d: d["layout"]["table"].update(sku_header="ITEM CODE"), "sku_header must be the one word"),
 ])
 def test_broken_profile_fails_at_load_naming_the_file(tmp_path, config_dir, change, message):
     with pytest.raises(ConfigError, match=message) as e:
@@ -45,6 +51,11 @@ def test_broken_profile_fails_at_load_naming_the_file(tmp_path, config_dir, chan
 def test_unpriced_model_is_rejected():
     with pytest.raises(ValueError, match="no price"):
         LLMConfig(text_model="x", vision_model="y", prices_usd_per_million_tokens={"x": {"input": 1, "output": 1}})
+    priced = {m: {"input": 1, "output": 1} for m in ("x", "y")}
+    with pytest.raises(ValueError, match="qwen/qwen3.8-27b"):        # a fallback needs a price too
+        LLMConfig(text_model="x", vision_model="y", fallback_text_model="", prices_usd_per_million_tokens=priced)
+    LLMConfig(text_model="x", vision_model="y", fallback_text_model="", fallback_vision_model="",
+              prices_usd_per_million_tokens=priced)
 
 
 def test_running_text_margins_follow_the_real_page_height(config_dir):

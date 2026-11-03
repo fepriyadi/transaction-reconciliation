@@ -3,7 +3,6 @@ import shutil
 
 import pytest
 
-from recon.pipeline import run_batch
 from recon.report import write_reports
 
 pytestmark = pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed (needed for scanned p.10)")
@@ -28,12 +27,9 @@ EXPECTED = {
 }
 
 
-@pytest.fixture(scope="module")
-def batch():
-    from pathlib import Path
-    root = Path(__file__).resolve().parent.parent
-    return run_batch([root / "data/Supplier_Invoices_PT_Prima_Kertas_Sep2026.pdf"],
-                     root / "data/ERP_AP_Export_Sep2026.xlsx", root / "config", llm=None)
+@pytest.fixture
+def batch(september_batch):
+    return september_batch
 
 
 def test_every_document_has_expected_status_and_difference(batch):

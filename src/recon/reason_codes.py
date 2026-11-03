@@ -131,7 +131,7 @@ def check_code(rule: str, target: str, side: str) -> str:
 
 
 def status_for(codes: Iterable[str]) -> str:
-    forced = [code(c).status for c in codes if code(c).status]
+    forced = [s for s in (code(c).status for c in codes) if s]
     return min(forced, key=STATUS_PRECEDENCE.index, default="MATCHED")
 
 
@@ -169,7 +169,7 @@ def registry_problems() -> list[str]:
             out.append(f"{c.code}: forces {c.status} but does not block approval")
     if len(REASON_CODES) != len(_CODES):
         out.append("duplicate reason code")
-    for c in list(CHECK_CODE.values()) + list(LINE_CODE.values()) + ["PDF_TOTAL_ERROR", "ERP_TOTAL_ERROR"]:
-        if c not in REASON_CODES:
-            out.append(f"{c}: mapped but not registered")
+    for name in list(CHECK_CODE.values()) + list(LINE_CODE.values()) + ["PDF_TOTAL_ERROR", "ERP_TOTAL_ERROR"]:
+        if name not in REASON_CODES:
+            out.append(f"{name}: mapped but not registered")
     return out

@@ -58,7 +58,7 @@ class Bridge:
 
     @property
     def explained(self) -> int:
-        return sum(v for k, v in self.items() if k != "unexplained")
+        return sum(v or 0 for k, v in self.items() if k != "unexplained")
 
 
 assert [f.name for f in fields(Bridge)] == [k for k, _ in BRIDGE_COMPONENTS]
@@ -125,7 +125,7 @@ class DocResult:
 
     @property
     def pdf_ref(self) -> str:
-        return "; ".join(f"{d.fields.get('file').value if d.fields.get('file') else ''} p.{','.join(map(str, d.pages))}"
+        return "; ".join(f"{f.value if (f := d.fields.get('file')) else ''} p.{','.join(map(str, d.pages))}"
                          for d in self.pdf_docs)
 
     @property

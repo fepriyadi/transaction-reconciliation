@@ -10,7 +10,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .explain import describe_line_pair
-from .normalize import fmt_idr
+from .normalize import fmt_idr, fmt_num
 from .reason_codes import LINE_CODE, REASON_CODES, STATUSES, highlighted_fields
 from .reconcile import BRIDGE_COMPONENTS
 
@@ -43,7 +43,7 @@ def documents_table(br, decisions: dict | None = None) -> pd.DataFrame:
         rows.append({
             "Document no.": r.doc_no,
             "Type": "Credit note" if r.doc_type == "CREDIT_NOTE" else ("Invoice" if r.doc_type == "INVOICE" else r.doc_type),
-            "Doc date": (p or e).doc_date if (p or e) and (p or e).doc_date else None,
+            "Doc date": either.doc_date if (either := p or e) and either.doc_date else None,
             "PO (PDF)": p.po_no if p else "",
             "PO (ERP)": e.po_no if e else "",
             "PDF source": r.pdf_ref,
@@ -100,7 +100,7 @@ def bridge_table(br) -> pd.DataFrame:
         rows.append(row)
     df = pd.DataFrame(rows)
     if not df.empty:
-        tot = {"Document no.": "BATCH TOTAL", "Status": ""}
+        tot: dict[str, object] = {"Document no.": "BATCH TOTAL", "Status": ""}
         for c in df.columns[2:]:
             tot[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).sum()
         df = pd.concat([df, pd.DataFrame([tot])], ignore_index=True)
@@ -110,8 +110,10 @@ def bridge_table(br) -> pd.DataFrame:
 def control_totals_table(br) -> pd.DataFrame:
     t = br.totals
     rows = [
-        ("Supplier documents in PDF", t.pdf_documents, f"{t.pdf_invoices} invoices, {t.pdf_credit_notes} credit notes, {t.pdf_lines} lines, {len(br.page_logs)} pages"),
-        ("ERP entries (in scope)", t.erp_entries, f"{t.erp_lines} lines; {t.erp_out_of_scope} entries for other vendors excluded"),
+        ("Supplier documents in PDF", t.pdf_documents,
+         f"{t.pdf_invoices} invoices, {t.pdf_credit_notes} credit notes, {t.pdf_lines} lines, {len(br.page_logs)} pages"),
+        ("ERP entries (in scope)", t.erp_entries,
+         f"{t.erp_lines} lines; {t.erp_out_of_scope} entries for other vendors excluded"),
         ("PDF batch total", t.pdf_total, "Σ document totals; credit notes negative"),
         ("ERP batch total", t.erp_total, "Σ Grand Total of in-scope entries; credit notes negative"),
         ("Difference (PDF − ERP)", t.difference, ""),
@@ -197,23 +199,69 @@ def reason_code_table() -> pd.DataFrame:
 def figure_boxes(r) -> dict:
     """page -> [(x0, y0, x1, y1, color)] for one result's PDF figures; figures behind a discrepancy in red."""
     red_header = highlighted_fields(r.reasons)
-    red_line: set = set()
+    red: set = {(id(d), k) for d in r.pdf_docs for k in red_header}
     for lp in r.line_discrepancies:
         if lp.pdf:
-            red_line |= {(id(lp.pdf), d) for d in lp.diffs if d in ("qty", "unit_price", "disc_pct")}
-            red_line.add((id(lp.pdf), "amount"))
+            red |= {(id(lp.pdf), d) for d in lp.diffs if d in ("qty", "unit_price", "disc_pct")}
+            red.add((id(lp.pdf), "amount"))
             if "extra_in_pdf" in lp.diffs:
-                red_line |= {(id(lp.pdf), k) for k in ("sku", "description", "qty", "unit_price")}
+                red |= {(id(lp.pdf), k) for k in ("sku", "description", "qty", "unit_price")}
+    return document_boxes(r.pdf_docs, red)
+
+
+def document_boxes(docs, red: frozenset | set = frozenset()) -> dict:
+    """page -> [(x0, y0, x1, y1, color)] for every figure with a box; `red` holds (id(document or line), field)."""
     out: dict = {}
-    for d in r.pdf_docs:
+    for d in docs:
         for k, f in d.fields.items():
             if f.src and f.src.bbox and f.src.page:
-                out.setdefault(f.src.page, []).append((*f.src.bbox, "red" if k in red_header else "blue"))
+                out.setdefault(f.src.page, []).append((*f.src.bbox, "red" if (id(d), k) in red else "blue"))
         for ln in d.lines:
             for k, f in ln.fields.items():
                 if f.src and f.src.bbox and f.src.page and k in ("sku", "qty", "unit_price", "disc_pct", "amount"):
-                    out.setdefault(f.src.page, []).append((*f.src.bbox, "red" if (id(ln), k) in red_line else "blue"))
+                    out.setdefault(f.src.page, []).append((*f.src.bbox, "red" if (id(ln), k) in red else "blue"))
     return out
+
+
+AUDIT_FIELDS = (("doc_no", "Document no."), ("doc_date", "Date"), ("po_no", "PO"), ("reference", "Reference"),
+                ("subtotal", "Subtotal"), ("dpp", "DPP"), ("ppn", "PPN"), ("total", "Total"))
+_MONEY_FIELDS = ("subtotal", "dpp", "ppn", "total")
+
+
+def figure_comparison_table(r) -> pd.DataFrame:
+    """Header figures of one result, PDF next to ERP, each with where it was read."""
+    p = r.pdf_docs[0] if r.pdf_docs else None
+    e = r.erp_docs[0] if r.erp_docs else None
+
+    def src(d, k):
+        f = d.fields.get(k) if d else None
+        return f.src.label().split(" › ")[-1] if f and f.src else ""
+
+    rows = []
+    for k, lab in AUDIT_FIELDS:
+        pv = getattr(p, k, None) if p else None
+        ev = getattr(e, k, None) if e else None
+        fmt = (lambda v: f"{v:,}") if k in _MONEY_FIELDS else (lambda v: str(v or ""))
+        rows.append({"Field": lab, "PDF": fmt(pv) if pv is not None else "", "PDF source": src(p, k),
+                     "ERP": fmt(ev) if ev is not None else "", "ERP source": src(e, k),
+                     "Match": "" if pv is None or ev is None
+                     else ("✓" if pv == ev or (k == "doc_no" and p is not None and e is not None and p.key == e.key)
+                           else "✗")})
+    return pd.DataFrame(rows)
+
+
+def line_pairs_table(r) -> pd.DataFrame:
+    """Every line of one result, paired by item code."""
+    rows = []
+    for lp in r.line_pairs:
+        a, b = lp.pdf, lp.erp
+        rows.append({"PDF #": a.line_no if a else None, "ERP #": b.line_no if b else None, "SKU": lp.sku,
+                     "Qty PDF/ERP": f"{fmt_num(a.qty) if a else '—'} / {fmt_num(b.qty) if b else '—'}",
+                     "Price PDF/ERP": f"{fmt_num(a.unit_price) if a else '—'} / {fmt_num(b.unit_price) if b else '—'}",
+                     "Disc PDF/ERP": f"{fmt_num(a.disc_pct) if a else '—'} / {fmt_num(b.disc_pct) if b else '—'}",
+                     "Amount PDF": a.amount if a else None, "Amount ERP": b.amount if b else None,
+                     "Diff": lp.amount_diff, "Issue": ", ".join(lp.diffs) or "✓"})
+    return pd.DataFrame(rows)
 
 
 def summary_sheet_rows(br) -> list:
@@ -301,7 +349,8 @@ def _style(path: Path):
         ws.freeze_panes = "B2"
         for i, h in enumerate(hdr, 1):
             col = get_column_letter(i)
-            width = 60 if h in ("Explanation", "Suggested action") else 40 if h in wrap_cols else max(12, min(28, len(str(h)) + 4))
+            width = (60 if h in ("Explanation", "Suggested action") else 40 if h in wrap_cols
+                     else max(12, min(28, len(str(h)) + 4)))
             ws.column_dimensions[col].width = width
             for c in ws[col][1:]:
                 if h in money_cols:

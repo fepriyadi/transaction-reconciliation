@@ -81,5 +81,13 @@ def test_dates():
     assert parse_date("09/10/2026", "MDY") == (date(2026, 9, 10), True)
 
 
+def test_dates_with_a_written_month():
+    assert parse_date("02 Oct 2026") == (date(2026, 10, 2), False)       # a written month is never ambiguous
+    assert parse_date("2 Okt 2026", "MDY") == (date(2026, 10, 2), False)
+    assert parse_date("15-Agustus-2026") == (date(2026, 8, 15), False)
+    assert parse_date("31 Feb 2026") == (None, False)
+    assert parse_date("02 Foo 2026") == (None, False)
+
+
 def test_vendor_normalisation_ignores_legal_form():
     assert norm_vendor("PT Prima Kertas Indonesia") == norm_vendor("PRIMA KERTAS INDONESIA, PT")

@@ -4,7 +4,7 @@ Every file in config/ has a schema here. A typo in a new supplier profile or a
 missing ERP column synonym fails at load time with the file and field named,
 instead of deep inside parsing on page 7 of a batch.
 
-    python -m recon.config [config_dir]     # validate a config directory
+    recon check [config_dir]     # validate a config directory (also: python -m recon.config)
 """
 from __future__ import annotations
 
@@ -15,12 +15,17 @@ from dataclasses import dataclass
 from datetime import date
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .onboarding import SupplierRegister
 from .rules import RuleConfig
+
+
+# src/recon/config.py -> the repository: config/, data/, app.py and eval/ live there (editable install)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG = PROJECT_ROOT / "config"
 
 
 class ConfigError(ValueError):
@@ -86,12 +91,20 @@ class LLMConfig(_Strict):
     """Defaults equal config/llm.json, so code and config can't drift apart."""
     text_model: str = "openai/gpt-oss-120b"
     vision_model: str = "meta-models/muse-spark-open"
+    fallback_text_model: str = "openai/gpt-oss-20b"        # called only when the main model is rate-limited; "" = none
+    fallback_vision_model: str = "qwen/qwen3.8-27b"
+    # completion budget of one profile draft: the JSON is ~400-650 tokens, gpt-oss reasoning counts on top of it
+    profile_max_completion_tokens: int = Field(default=4096, gt=0)
     prices_usd_per_million_tokens: dict[str, ModelPrice] = {}
+
+    @property
+    def models(self) -> list[str]:
+        return [m for m in (self.text_model, self.vision_model, self.fallback_text_model, self.fallback_vision_model) if m]
 
     @model_validator(mode="after")
     def _priced(self):
         if self.prices_usd_per_million_tokens:
-            missing = [m for m in (self.text_model, self.vision_model) if m not in self.prices_usd_per_million_tokens]
+            missing = [m for m in self.models if m not in self.prices_usd_per_million_tokens]
             if missing:
                 raise ValueError(f"no price for configured model(s) {missing}: the cost estimate would read $0")
         return self
@@ -105,6 +118,13 @@ class LLMConfig(_Strict):
 class HeaderFieldSpec(_Strict):
     labels: list[str] = Field(min_length=1)
     pattern: str
+
+    @field_validator("labels")
+    @classmethod
+    def _text(cls, v: list[str]) -> list[str]:
+        if any(not re.search(r"[A-Za-z0-9]", label) for label in v):
+            raise ValueError(f"every label needs printed text (an empty label matches every row): {v}")
+        return v
 
     @field_validator("pattern")
     @classmethod
@@ -129,6 +149,14 @@ class TableSpec(_Strict):
     stop_markers: list[str] = []
     row_reach: float = Field(14, gt=0)
     right_fields: list[RightField] = Field(min_length=1)
+
+    @field_validator("sku_header")
+    @classmethod
+    def _one_word(cls, v: str) -> str:
+        # the parser compares it with single words of the heading row; '#' heads the line numbers, not the items
+        if not re.fullmatch(r"\S*[A-Za-z0-9]\S*", v.strip()):
+            raise ValueError(f"sku_header must be the one word over the item-code column, e.g. 'Kode' or 'ITEM': {v!r}")
+        return v
 
     @field_validator("right_fields")
     @classmethod
@@ -192,7 +220,10 @@ class RegisterFile(_Strict):
 
 # --------------------------------------------------------------------------- loading
 
-def _read(path: Path, schema: type[BaseModel], required: bool = True, **extra) -> BaseModel:
+M = TypeVar("M", bound=BaseModel)
+
+
+def _read(path: Path, schema: type[M], required: bool = True, **extra) -> M:
     if not path.exists():
         if required:
             raise ConfigError(f"{path}: missing")
@@ -253,11 +284,20 @@ class Config:
         return self.rules.rule_config()
 
 
-if __name__ == "__main__":
-    d = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "config"
+def main(argv=None) -> int:
+    """`recon check [dir]`: validate a config directory; exit 1 if it is invalid."""
+    args = sys.argv[1:] if argv is None else argv
+    d = Path(args[0]) if args else DEFAULT_CONFIG
     try:
         cfg = Config.load(d)
     except ConfigError as e:
-        sys.exit(f"INVALID {e}")
+        print(f"INVALID {e}", file=sys.stderr)
+        return 1
     print(f"OK {d}: {len(cfg.profiles)} supplier profile(s) ({', '.join(p.file for p in cfg.profiles)}), "
-          f"{len(cfg.register.onboarded)} registered supplier(s), models {cfg.llm.text_model} / {cfg.llm.vision_model}")
+          f"{len(cfg.register.onboarded)} registered supplier(s), models {cfg.llm.text_model} / {cfg.llm.vision_model} "
+          f"(fallback {cfg.llm.fallback_text_model or 'none'} / {cfg.llm.fallback_vision_model or 'none'})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

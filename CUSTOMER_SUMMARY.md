@@ -35,10 +35,13 @@ Each item has a ready action, for example "reverse duplicate entry E-10460 befor
 - **September:** all 16 documents got the correct status and cause. The batch runs in under 2 seconds.
 - **14 simulated "next month" batches**, each with a deliberately planted error (deleted, duplicated or changed entries, wrong references, formatting changes): all 14 were caught, with nothing else disturbed.
 - **Poor-quality scans** are the weak spot. Mildly degraded copies of the invoices were read correctly 13 times out of 14. Very poor copies could not be read automatically. In every test, a page the system could not read reliably was **sent to a person, never approved by mistake**.
+- **A second supplier layout was set up without any programming.** We tested this on a sample October batch in a different invoice layout (12 documents). The AI drafted the layout settings and the system checked them against every figure on the pages. A reviewer then confirmed them on screen. It caught a double booking, a missing booking, a mistyped PO reference and two ERP entry errors. The difference was fully explained, and every document was held for review because the supplier is new.
+- **Every change is checked automatically** (222 tests) before it is used, and the system runs as a self-contained package that IT can install on a server.
+- **If the AI service is busy, it switches to a backup model.** Without AI, everything still runs. The AI adds a second read of scanned pages and handles layouts that are not set up yet.
 
 ## What it cannot do yet
 
-- It is set up for one supplier layout (Prima Kertas). A new supplier's invoices can be read with AI assistance, but should be reviewed manually for their first month.
+- Two supplier layouts are set up: Prima Kertas, fully tested, and the sample October layout, confirmed from one batch only. Every other supplier needs the guided setup once. Its documents are held for review in its first month, and the system enforces this.
 - It assumes the supplier uses your ERP item codes. Suppliers with their own codes need a code-mapping table.
 - Very poor scans need the AI reading option switched on, or manual entry.
 - Approvals are saved locally. There are no user logins or two-person sign-off yet.
@@ -46,6 +49,6 @@ Each item has a ready action, for example "reverse duplicate entry E-10460 befor
 ## What we recommend next
 
 1. **Pilot on October with 3–5 suppliers**, including one that sends scanned invoices. Measure reviewer time against the current two days.
-2. **Onboard the remaining suppliers in waves**, one month in "review everything" mode each, then switch to auto-approval for documents that fully agree.
+2. **Onboard the remaining suppliers in waves** with the guided setup, one month in "review everything" mode each, then switch to auto-approval for documents that fully agree.
 3. **Add logins, two-person approval above an amount threshold, and an export of approved amounts** to the payment run.
 4. **Connect directly to the ERP** instead of monthly exports, so duplicates and missing bookings are caught as they happen.

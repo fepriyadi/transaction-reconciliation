@@ -6,6 +6,7 @@ so supporting a new layout is a config change, not a code change.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from fractions import Fraction
 from typing import Optional
 
@@ -114,48 +115,21 @@ def parse_page_with_profile(words: list[Word], profile: SupplierProfile, page_no
             comp = compact(row_text(r))
             if not any(l in comp for l in labels):
                 continue
-            label_x = _label_x(r, spec.labels)
-            for w in r:
-                if w.x0 < label_x:
-                    continue
-                m = pat.search(w.text)
-                if m:
-                    pp.header[fname] = Field(m.group(0), w.text, ref([w]))
-                    conf_of([w])
-                    break
-            if fname in pp.header:
+            at = _label_at(r, spec.labels)
+            hit = _search_words(r[at[0]:], pat, skip=at[1]) if at else _search_words(r, pat)
+            if hit:
+                value, ws = hit
+                pp.header[fname] = Field(value, row_text(ws), ref(ws))
+                conf_of(ws)
                 break
 
     # ---- table
     tbl = lay.table
-    hdr_idx = None
-    for i, r in enumerate(rows):
-        comp = compact(row_text(r))
-        if all(compact(k) in comp for k in tbl.header_keywords):
-            hdr_idx = i
-            break
-    total_labels_first = {compact(s.labels[0].split()[0]) for s in lay.totals.values()}
-
-    if hdr_idx is not None:
+    spot = locate_table(words, profile, page_height, rows)
+    if spot is not None:
         pp.has_table = True
-        hrow = rows[hdr_idx]
-        hy = hrow[0].yc
-        top = max(w.y1 for w in words if abs(w.yc - hy) <= 10)
-        sku_x = min((w.x0 for w in hrow if compact(w.text) == compact(tbl.sku_header)), default=None)
-        stop_y = (page_height or profile.page_height) - lay.footer_margin
-        for r in rows:
-            if r[0].yc <= top:
-                continue
-            comp_first = compact(r[0].text)
-            if comp_first in total_labels_first or any(compact(s) in compact(row_text(r)) for s in tbl.stop_markers):
-                stop_y = min(stop_y, r[0].y0)
-                break
-        body = [w for w in words if top < w.yc < stop_y]
-        if sku_x is None:
-            sku_x = min((w.x0 for w in body), default=0) + 20
-        anchors = [w for w in body if w.xc < sku_x - 2 and re.fullmatch(r"\d{1,3}\.?", w.text)]
-        anchors.sort(key=lambda w: w.yc)
-        groups = {id(a): [] for a in anchors}
+        body, anchors = spot.body, spot.anchors
+        groups: dict[int, list[Word]] = {id(a): [] for a in anchors}
         for w in body:
             if not anchors or any(w is a for a in anchors):
                 continue
@@ -170,8 +144,8 @@ def parse_page_with_profile(words: list[Word], profile: SupplierProfile, page_no
                 pp.lines.append(ln)
 
     # ---- totals: label word starts the row segment, value is the rightmost amount
-    for fname, spec in lay.totals.items():
-        lab_words = [compact(x) for x in spec.labels[0].split()]
+    for tname, tspec in lay.totals.items():
+        lab_words = [compact(x) for x in tspec.labels[0].split()]
         for r in rows:
             idx = next((i for i, w in enumerate(r) if compact(w.text) == lab_words[0]), None)
             if idx is None:
@@ -182,26 +156,115 @@ def parse_page_with_profile(words: list[Word], profile: SupplierProfile, page_no
                 continue
             v = vals[-1]
             label = " ".join(w.text for w in r[idx:] if w.x1 <= v.x0)
-            pp.totals[fname] = Field(parse_int_amount(v.text, hint), v.text, ref([v]))
-            pp.totals_labels[fname] = label
+            pp.totals[tname] = Field(parse_int_amount(v.text, hint), v.text, ref([v]))
+            pp.totals_labels[tname] = label
             conf_of([v])
             break
     return pp
 
 
-def _label_x(row: list[Word], labels: list[str]) -> float:
-    """x where the label starts in the row (the value must lie to its right).
+@dataclass
+class TableSpot:
+    """Where a page's item table is, as the parser sees it (shared with the profile dry run's diagnosis)."""
+    heading: list[Word]          # the column-heading row
+    top: float                   # item rows start below this y
+    stop_y: float                # ... and end above this y
+    stop_why: str                # what ended the table there
+    sku_x: float                 # line numbers must lie left of this x
+    sku_guessed: bool            # sku_header is not a word of the heading row: sku_x is a guess
+    body: list[Word]
+    anchors: list[Word]          # line-number words, top to bottom
+
+
+def locate_table(words: list[Word], profile: SupplierProfile, page_height: Optional[float] = None,
+                 rows: Optional[list[list[Word]]] = None) -> Optional[TableSpot]:
+    """The item table: the first row holding every header keyword, down to the first total label,
+    stop marker or the footer margin. None when no row holds every keyword."""
+    rows = group_rows(words) if rows is None else rows
+    lay, tbl = profile.layout, profile.layout.table
+    hrow = next((r for r in rows if all(compact(k) in compact(row_text(r)) for k in tbl.header_keywords)), None)
+    if hrow is None:
+        return None
+    hy = hrow[0].yc
+    top = max(w.y1 for w in words if abs(w.yc - hy) <= 10)
+    total_labels_first = {compact(s.labels[0].split()[0]) for s in lay.totals.values()}
+    stop_y = (page_height or profile.page_height) - lay.footer_margin
+    stop_why = f"footer_margin {lay.footer_margin:g}"
+    for r in rows:
+        if r[0].yc <= top:
+            continue
+        marker = next((s for s in tbl.stop_markers if compact(s) in compact(row_text(r))), None)
+        if compact(r[0].text) in total_labels_first or marker:
+            if r[0].y0 < stop_y:
+                stop_y = r[0].y0
+                stop_why = (f"stop marker '{marker}'" if marker else f"total label '{r[0].text}'") + f" on '{row_text(r)}'"
+            break
+    body = [w for w in words if top < w.yc < stop_y]
+    sku_x = min((w.x0 for w in hrow if compact(w.text) == compact(tbl.sku_header)), default=None)
+    guessed = sku_x is None
+    if sku_x is None:
+        sku_x = min((w.x0 for w in body), default=0) + 20
+    anchors = sorted((w for w in body if w.xc < sku_x - 2 and re.fullmatch(r"\d{1,3}\.?", w.text)), key=lambda w: w.yc)
+    return TableSpot(hrow, top, stop_y, stop_why, sku_x, guessed, body, anchors)
+
+
+def table_problem(words: list[Word], profile: SupplierProfile, page_height: Optional[float] = None) -> str:
+    """Why the parser reads no item rows on this page, naming the profile key to change ('' if it does)."""
+    tbl = profile.layout.table
+    rows = group_rows(words)
+    spot = locate_table(words, profile, page_height, rows)
+    if spot is None:
+        closest = max(rows, key=lambda r: sum(compact(k) in compact(row_text(r)) for k in tbl.header_keywords),
+                      default=[])
+        missing = [k for k in tbl.header_keywords if compact(k) not in compact(row_text(closest))]
+        return (f"the table heading row was not found: no row has every header_keywords word; the closest, "
+                f"'{row_text(closest)}', lacks {missing} (use only words printed on the heading row of every "
+                f"document type)")
+    if spot.sku_guessed:
+        return (f"sku_header '{tbl.sku_header}' is not a word of the heading row '{row_text(spot.heading)}' "
+                f"(use the single word over the item-code column)")
+    if not spot.anchors:
+        if not [w for w in spot.body if re.fullmatch(r"\d{1,3}\.?", w.text)]:
+            return f"the table ends above its first item row, at {spot.stop_why}"
+        return (f"no line numbers left of the sku_header column '{tbl.sku_header}': it must head the item-code "
+                f"column, not the line-number column")
+    return ""
+
+
+def _label_at(row: list[Word], labels: list[str]) -> Optional[tuple[int, int]]:
+    """Where the label starts in the row (index of its first word) and its length in compact characters.
     Labels are compared without spaces/punctuation so OCR spacing doesn't matter."""
     comps = [compact(l) for l in labels]
     for i in range(len(row)):
         acc = ""
         for w in row[i:]:
             acc += compact(w.text)
-            if any(acc.startswith(c) for c in comps):
-                return row[i].x0
+            hit = next((c for c in comps if acc.startswith(c)), None)
+            if hit is not None:
+                return i, len(hit)
             if not any(c.startswith(acc) for c in comps):
                 break
-    return 0.0
+    return None
+
+
+def _search_words(ws: list[Word], pat: re.Pattern, skip: int = 0):
+    """First match of `pat` in the words joined by single spaces, so a value may span words
+    ('02 Oct 2026'), searched after the first `skip` compact characters: the label, so 'PO' in
+    'PO Reference:' is never the value, while a value OCR glued to its label ('Date:02-10-2026')
+    is still found. Returns (matched text, the words it covers) or None."""
+    text, spans = "", []
+    for w in ws:
+        start = len(text) + (1 if text else 0)
+        text = f"{text} {w.text}" if text else w.text
+        spans.append((start, len(text), w))
+    pos, seen = 0, 0
+    while seen < skip and pos < len(text):
+        seen += bool(compact(text[pos]))
+        pos += 1
+    m = pat.search(text, pos)
+    if not m:
+        return None
+    return m.group(0), [w for s, e, w in spans if s < m.end() and e > m.start()]
 
 
 def _clean(w: Word) -> Optional[Word]:

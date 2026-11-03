@@ -1,9 +1,14 @@
 {
-  "_comment": "Groq models and list prices used for the cost estimate. Check https://groq.com/pricing for current values.",
+  "_comment": "Groq models and list prices used for the cost estimate. Check https://groq.com/pricing for current values. A fallback model is called only when the main one is rate-limited; \"\" means no fallback.",
   "text_model": "openai/gpt-oss-120b",
   "vision_model": "meta-models/muse-spark-open",
+  "fallback_text_model": "openai/gpt-oss-20b",
+  "fallback_vision_model": "qwen/qwen3.8-27b",
+  "profile_max_completion_tokens": 4096,
   "prices_usd_per_million_tokens": {
     "meta-models/muse-spark-open": {"input": 0.08, "output": 0.40},
-    "openai/gpt-oss-120b": {"input": 0.15, "output": 0.60}
+    "openai/gpt-oss-120b": {"input": 0.15, "output": 0.60},
+    "openai/gpt-oss-20b": {"input": 0.075, "output": 0.30},
+    "qwen/qwen3.8-27b": {"input": 0.80, "output": 4.00}
   }
 }

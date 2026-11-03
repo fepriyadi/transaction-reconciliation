@@ -39,7 +39,9 @@ class LinePair:
 
     @property
     def sku(self) -> str:
-        return (self.pdf or self.erp).sku
+        side = self.pdf or self.erp
+        assert side is not None                  # a pair always has at least one side
+        return side.sku
 
 
 def scope_erp(erp_docs: list[Document], vendor_names: list[str]) -> tuple[list, list]:
@@ -47,7 +49,8 @@ def scope_erp(erp_docs: list[Document], vendor_names: list[str]) -> tuple[list, 
     wanted = {norm_vendor(v) for v in vendor_names if v}
     if not wanted:
         return erp_docs, []
-    keep, out = [], []
+    keep: list[Document] = []
+    out: list[Document] = []
     for d in erp_docs:
         (keep if norm_vendor(d.vendor) in wanted else out).append(d)
     return keep, out
@@ -154,6 +157,7 @@ def match_lines(pdf_lines: list[Line], erp_lines: list[Line]) -> list[LinePair]:
     def order_key(lp: LinePair):
         if lp.pdf is not None:
             return (0, lp.pdf.line_no or 0)
+        assert lp.erp is not None
         return (1, lp.erp.line_no or 0)
     pairs.sort(key=order_key)
     return pairs

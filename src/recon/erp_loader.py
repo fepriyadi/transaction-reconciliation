@@ -58,16 +58,16 @@ def load_erp(path: Path, mapping: Union[ErpMapping, Path]) -> ErpLoad:
 
     for ws in wb.worksheets:
         rows = list(ws.iter_rows(values_only=True))
-        role, hdr_row, cols = "info", None, {}
+        role, hdr_row, cols = "info", 0, {}
         for i, r in enumerate(rows[:10]):
-            vals = list(r)
-            lc = _map_header(vals, cfg.line_fields)
-            hc = _map_header(vals, cfg.header_fields)
+            heads = list(r)
+            lc = _map_header(heads, cfg.line_fields)
+            hc = _map_header(heads, cfg.header_fields)
             if {"entry_id", "sku", "qty", "amount"} <= lc.keys():
                 role, hdr_row, cols = "lines", i, lc
                 break
             if {"doc_no", "total"} <= hc.keys():
-                is_cn = any(_c(m) in [_c(v) for v in vals] for m in cfg.credit_note_markers)
+                is_cn = any(_c(m) in [_c(v) for v in heads] for m in cfg.credit_note_markers)
                 role, hdr_row, cols = ("credit_notes" if is_cn else "invoices"), i, hc
                 break
         res.sheets.append((ws.title, role, max(0, len(rows) - 1)))

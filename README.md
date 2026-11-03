@@ -9,18 +9,33 @@ On the September sample: **16/16 documents get the right status and cause**. The
 ```bash
 brew install tesseract                     # OCR for scanned pages (Linux: apt install tesseract-ocr)
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt && pip install --no-deps -e .   # installs src/recon and the `recon` command
 cp .env.example .env                       # optional: put a GROQ_API_KEY in it
-streamlit run app.py                       # UI: run the sample, or upload a new batch
+recon ui                                   # UI: run the sample, or upload a new batch
 ```
 
 A new batch (e.g. the October files in the demo) needs no code change:
 
 ```bash
-python run_batch.py --pdf Supplier_Invoices_*_Oct2026.pdf --erp ERP_AP_Export_Oct2026.xlsx --out output/oct2026
-python -m recon.config                     # validate config/ (profiles, rules, ERP mapping, LLM models)
-pytest -q                                  # 157 tests
-python eval/evaluate.py                    # writes eval/RESULTS.md (add --llm to evaluate the Groq vision path)
+recon run --pdf Supplier_Invoices_*_Oct2026.pdf --erp ERP_AP_Export_Oct2026.xlsx --out output/oct2026
+recon check                                # validate config/ (profiles, rules, ERP mapping, LLM models)
+recon eval                                 # writes eval/RESULTS.md (add --llm to evaluate the Groq vision path)
+```
+
+`recon` is the single entry point (`python -m recon` is the same). `recon ui` starts Streamlit and passes any extra arguments to it. The old `python run_batch.py ...` still works as an alias of `recon run ...`. `recon run -v` logs each step and warning, and `-vv` logs every LLM call with its tokens and cost.
+
+Development checks (CI runs the same on every push, plus a Docker build):
+
+```bash
+pip install -r requirements-dev.txt
+ruff check && mypy && pytest -q            # lint, types, 222 tests
+```
+
+With Docker (tesseract included):
+
+```bash
+docker build -t recon .
+docker run --rm -p 8501:8501 --env-file .env -v "$PWD/output:/app/output" recon
 ```
 
 Outputs in `--out`:
@@ -66,6 +81,15 @@ unexplained          0
 ## Architecture
 
 ```text
+config/          supplier profiles, rules, ERP mapping, LLM models (validated by src/recon/config.py)
+data/            the September sample
+src/recon/       the package: everything `recon run` does
+app.py           Streamlit UI (`recon ui`)
+eval/            evaluation suites (`recon eval`)
+tests/           pytest, including a fake LLM (tests/fakes.py)
+```
+
+```text
 config/*.json ──► recon.config (schemas, validated once per run) ──► passed to every step below
 
 PDF ──► extract ──► Documents(PDF) ──┐
@@ -79,18 +103,22 @@ XLSX ──► erp_loader ──► Documents(ERP)┘   PO+total,    reason_code
 
 | Module | Responsibility |
 |---|---|
-| `recon/normalize.py` | Canonical document numbers, SKUs, vendors; numbers in ID/US formats and OCR noise; dates (DMY/MDY, ambiguity) |
-| `recon/rules.py` | R1–R5 with exact `Fraction` arithmetic and explicit half-up rounding; R7 self-consistency checks |
-| `recon/config.py` | Pydantic schema for every file in `config/`; loaded and validated once per run, so a broken profile fails at load with the file and field named |
-| `recon/extract/` | PDF → documents: `words` (text layer, OCR, deskew), `profile_parser` (labels + row grammar), `llm_reader` (schema-checked LLM reply), `arbitrate` (OCR retries, OCR vs vision), `assemble` (multi-page stitching, confidence) |
-| `recon/erp_loader.py` | Reads **all** sheets, classifies them by header synonyms (`config/erp_mapping.json`), keeps `sheet!cell` per value |
-| `recon/matching.py` | Document groups (duplicates kept, secondary PO+total key), line matching by SKU in three passes |
-| `recon/reason_codes.py` | The status policy: every reason code with its severity, the status it forces, its precedence and the figures it highlights. Status, review requirement, queue order and audit highlighting are all read from here |
-| `recon/reconcile.py` | Reason codes per document, typed difference `Bridge` and `ControlTotals`. R7 results are held on the result (`DocChecks`); input documents are never modified |
-| `recon/explain.py` | Template explanations, actions and headlines |
-| `recon/review.py` | Append-only reviewer decision log per batch; a decision made on different facts is reported as stale |
-| `recon/llm.py` | Groq wrapper: vision/text extraction (reply checked against an `LLMPage` schema), summary wording, hallucination guard |
-| `recon/report.py`, `app.py`, `run_batch.py` | Excel/CSV, Streamlit UI, CLI |
+| `src/recon/normalize.py` | Canonical document numbers, SKUs, vendors; numbers in ID/US formats and OCR noise; dates (DMY/MDY, ambiguity) |
+| `src/recon/rules.py` | R1–R5 with exact `Fraction` arithmetic and explicit half-up rounding; R7 self-consistency checks |
+| `src/recon/config.py` | Pydantic schema for every file in `config/`; loaded and validated once per run, so a broken profile fails at load with the file and field named |
+| `src/recon/extract/` | PDF → documents: `words` (text layer, OCR, deskew), `profile_parser` (labels + row grammar), `llm_reader` (schema-checked LLM reply), `arbitrate` (OCR retries, OCR vs vision), `assemble` (multi-page stitching, confidence) |
+| `src/recon/erp_loader.py` | Reads **all** sheets, classifies them by header synonyms (`config/erp_mapping.json`), keeps `sheet!cell` per value |
+| `src/recon/matching.py` | Document groups (duplicates kept, secondary PO+total key), line matching by SKU in three passes |
+| `src/recon/reason_codes.py` | The status policy: every reason code with its severity, the status it forces, its precedence and the figures it highlights. Status, review requirement, queue order and audit highlighting are all read from here |
+| `src/recon/reconcile.py` | Reason codes per document, typed difference `Bridge` and `ControlTotals`. R7 results are held on the result (`DocChecks`); input documents are never modified |
+| `src/recon/explain.py` | Template explanations, actions and headlines |
+| `src/recon/summary.py` | CFO summary: computed facts, the deterministic wording, and the LLM wording, which is used only if every number in it is one of the facts |
+| `src/recon/pipeline.py` | `run_batch` runs the steps in order (extract → ERP → match → reconcile → totals → summary) and times them; each step is its own function |
+| `src/recon/review.py` | Append-only reviewer decision log per batch; a decision made on different facts is reported as stale |
+| `src/recon/llm.py` | The interfaces the pipeline depends on: `PageReader` (extraction), `SummaryWriter` (summary), `ProfileDrafter` (layout profile drafts), and `LLMClient`, which is all three. `GroqLLM` implements them, and `tests/fakes.py` has a fake LLM for tests. Also the `LLMPage` reply schema and the hallucination guard |
+| `src/recon/profile_draft.py` | A new layout's profile: the LLM drafts it, a dry run puts it through `extract_pdf` on the same pages and compares every figure with the LLM's read and R1–R4, and it is written to `config/suppliers/` only when a reviewer confirms |
+| `src/recon/report.py`, `src/recon/render.py` | Excel/CSV and every table the UI shows; a PDF page drawn with its figure boxes |
+| `src/recon/cli.py`, `src/recon/uploads.py`, `app.py` | The single entry point `recon` (`run`, `ui`, `check`, `eval`), content-addressed upload storage, Streamlit UI (screen layout only) |
 | `config/` | `rules.json` (tax factors, tolerances), `erp_mapping.json`, `suppliers/*.json` (one per layout), `supplier_register.json`, `llm.json` (models and prices; the code's defaults equal this file) |
 
 ## Where the LLM is used, and where it is not
@@ -104,6 +132,7 @@ The rule is: **code decides; the LLM reads and words.**
 | Text-layer pages of a known supplier | Code (profile) | The text layer is exact, so an LLM would only add risk and cost |
 | Scanned pages | Tesseract + **Groq vision second read** | Two independent reads. If they agree, confidence is high. If they disagree, the read whose own arithmetic holds is used; if that doesn't settle it, the document is flagged `EXTRACTION_CONFLICT` |
 | Pages of a supplier with no profile yet | **Groq** (text or vision) | Removes the layout-onboarding bottleneck for 40+ suppliers. Output is re-parsed and checked by code, and tagged `EXTRACTED_BY_LLM` for review |
+| Drafting a new layout's supplier profile | **Groq** (text), on request in the UI | The LLM proposes the JSON; code dry-runs it on the same pages against the LLM's read and R1–R4, and a person confirms before it is saved. The reply is capped at `profile_max_completion_tokens` (4096, in `config/llm.json`) |
 | AP-manager / CFO summary | **Groq**, optional | Wording only. The summary is rejected if it contains any number not present in the computed facts (rounded figures like "17.2 million" are rejected too). A deterministic summary is the fallback |
 
 Without a `GROQ_API_KEY` everything still runs, fully deterministically.
@@ -114,7 +143,7 @@ Without a `GROQ_API_KEY` everything still runs, fully deterministically.
 - **Lines match by SKU, never by position.** The ERP sorts 0153's 34 lines differently, and repeated SKUs with different discounts are paired exactly first.
 - **One identity for the bridge.** Each document's difference splits into named parts that add up by construction: line differences, the invoice's own subtotal error, PPN on subtotal differences, PPN calculation deviations on each side, and total errors. So "unexplained = 0" is a real check, not a plug.
 - **R7 is applied to both sides.** A document's own numbers are checked against the *stated* previous figure, so one error is reported once instead of cascading. A tax deviation ≤ IDR 10 is classed as rounding (`ERP_TAX_ROUNDING`), not an error. That is what makes 0143 `MATCHED_WITHIN_TOLERANCE` rather than `NEEDS_REVIEW`.
-- **Status precedence:** duplicate → missing → NEEDS_REVIEW (own arithmetic, key references, extraction) → AMOUNT_MISMATCH → within tolerance → matched. 0148 and 0149 also differ in amount, but they are NEEDS_REVIEW: the supplier's figures are wrong, so "pay the difference" is the wrong action. The precedence and each code's effect live in one table (`recon/reason_codes.py`); an unregistered code fails loudly instead of being classified by its name.
+- **Status precedence:** duplicate → missing → NEEDS_REVIEW (own arithmetic, key references, extraction) → AMOUNT_MISMATCH → within tolerance → matched. 0148 and 0149 also differ in amount, but they are NEEDS_REVIEW: the supplier's figures are wrong, so "pay the difference" is the wrong action. The precedence and each code's effect live in one table (`src/recon/reason_codes.py`); an unregistered code fails loudly instead of being classified by its name.
 - **Configuration is validated, not trusted.** Every file in `config/` has a schema. A typo such as `foter_margin`, an invalid regex or a row grammar without an `amount` column stops the run before any page is read.
 - **Sign convention:** credit notes are stored negative on both sides (the PDF prints them positive) so batch totals add up.
 - **Secondary matching is never silent.** If document numbers differ but type, PO and total agree on exactly one candidate, the pair is made and flagged `MATCHED_BY_SECONDARY_KEY`.
@@ -136,15 +165,17 @@ Use: a document is auto-approvable only if its status is MATCHED or MATCHED_WITH
 
 ## Onboarding a new supplier layout safely
 
-Enforced in code ([recon/onboarding.py](recon/onboarding.py)): every document of a supplier's first month goes to review, whether it was read by a layout profile or by the LLM. A supplier's go-live date is in `config/supplier_register.json`; documents dated within `new_supplier_review_days` (31, in `config/rules.json`) of it get `NEW_SUPPLIER` and are held for a person, even when they match the ERP exactly. A supplier missing from the register is always held. The status itself is not changed: a matching document stays MATCHED, it just can't be auto-approved.
+Enforced in code ([src/recon/onboarding.py](src/recon/onboarding.py)): every document of a supplier's first month goes to review, whether it was read by a layout profile or by the LLM. A supplier's go-live date is in `config/supplier_register.json`; documents dated within `new_supplier_review_days` (31, in `config/rules.json`) of it get `NEW_SUPPLIER` and are held for a person, even when they match the ERP exactly. A supplier missing from the register is always held. The status itself is not changed: a matching document stays MATCHED, it just can't be auto-approved.
 
-The process around it (steps 2–4 are manual today):
+The process around it (steps 3–4 are manual today):
 
-1. Add the supplier to `config/supplier_register.json` with its go-live date, and run its first batch with the LLM path. Every document goes to review.
-2. Draft `config/suppliers/<supplier>.json`: detection keywords, header labels and patterns, row grammar and decimal separator. The LLM can propose it; a person commits it. `python -m recon.config` checks it against the schema.
+1. Run its first batch with the LLM path. A supplier not in `config/supplier_register.json` is always held, so every document goes to review.
+2. Draft `config/suppliers/<supplier>.json`: detection keywords, header labels and patterns, row grammar and decimal separator. In the UI (Extraction log → *New layout → supplier profile*) the LLM drafts it from the batch's pages and the reviewer picks the supplier's name in the ERP export. Code then reads the same pages with the draft and compares every figure with the LLM's read and with R1–R4; problems go back to the LLM for one revision. The reviewer can also edit the draft's JSON and re-check it; a saved profile then records that it was edited. The draft cannot be saved while a page goes unread, a date is not understood, or another supplier's page prints its detect text. Disagreements are drawn in red on the page and must be looked at. On confirmation it is written locally with who confirmed it, the supplier is added to `config/supplier_register.json` with that day as its go-live date (a supplier already registered keeps its date), and the batch is read again with it. `recon check` checks it against the schema.
 3. Freeze 2–3 reviewed invoices as golden files and add an expected-results test like `tests/test_september_batch.py`.
 4. Shadow mode for one cycle: the profile and LLM reads run side by side. The profile is promoted only when they agree and every arithmetic check passes.
 5. Afterwards, any drift (a row-grammar miss, a gap in line numbers, failed checks on many documents) shows up as low confidence. Documents are held, not mis-approved.
+
+Worked example: `config/suppliers/sagara_digital_supply.json` was drafted this way from a dummy October 2026 batch (`Supplier_Invoices_PT_Sagara_Digital_Supply_Oct2026_DUMMY.pdf`, 11 pages) by `openai/gpt-oss-120b`. The dry run had 0 disagreements, and it was confirmed on 2026-11-03, which added Sagara to `config/supplier_register.json` with that go-live date. Re-read with the profile, the batch gives 12 documents: 5 MATCHED, 1 MISSING_IN_ERP, 1 DUPLICATE_IN_ERP, 3 NEEDS_REVIEW, 1 AMOUNT_MISMATCH and 1 MISSING_IN_PDF, with the −Rp 3,047,150 difference fully explained. Every document dated before 2026-12-04 (go-live + 31 days) is in the new-supplier period, so all 12 carry `NEW_SUPPLIER` and none can be auto-approved. Steps 3–4 have not been done for it.
 
 ## Cost and runtime per batch
 
@@ -153,6 +184,7 @@ The process around it (steps 2–4 are manual today):
   - one vision call per scanned page (`meta-models/muse-spark-open`, $0.08 / $0.40 per million input / output tokens; roughly 2.5k in + 1k out, ≈ $0.0006)
   - one summary call (`openai/gpt-oss-120b`, $0.15 / $0.60; roughly 1.5k in + 0.3k out, ≈ $0.0004)
   - so **about $0.001 per supplier batch** with one scanned page. Even if every page of 40 suppliers' 16-page batches went to the LLM, it stays under $0.50 a month
+- **Fallback models when rate-limited:** a call that gets a rate limit (429, or Groq's 413 over the tokens-per-minute limit) is repeated once on `fallback_text_model` (`openai/gpt-oss-20b`, $0.075 / $0.30) or `fallback_vision_model` (`qwen/qwen3.8-27b`, $0.80 / $4.00, a Groq preview model that accepts images). Other errors are not retried. The cost is booked at the fallback's price, and the run log names the model that answered.
 - The app shows actual calls, tokens, seconds and cost for each run (Overview → Run statistics). Prices are in `config/llm.json`; the config check refuses a configured model without a price, so the estimate can't silently read $0.
 
 ## Evaluation (full results in [eval/RESULTS.md](eval/RESULTS.md))
@@ -175,11 +207,11 @@ The process around it (steps 2–4 are manual today):
    - medium (150 dpi, blur, speckle): mostly misread but caught by the checks
    - harsh (110 dpi, 2.5°, heavy noise): document numbers unreadable, so every page is flagged
 
-   This is the case the Groq vision read exists for. `python eval/evaluate.py --llm` measures it, but that path was **not run here** because no API key was available in the build environment.
+   This is the case the Groq vision read exists for. `recon eval --llm` measures it, but that path was **not run here** because no API key was available in the build environment.
 
 ## Known limitations
 
-- Only one supplier profile exists. Other layouts depend on the LLM path, which is implemented but not yet evaluated with a live key.
+- Two supplier profiles exist. Only `prima_kertas.json` has golden-file tests and the evaluation suites. `sagara_digital_supply.json` was drafted by the LLM and confirmed in the UI from one dummy batch, with no golden-file test yet. Other layouts depend on the LLM path. The LLM path has been used live for profile drafting and summaries, but its extraction accuracy has not been evaluated. Tests with a fake LLM (`tests/test_llm_path.py`) cover what the pipeline does with the replies: a page read correctly, a reply in the wrong shape, a call that fails, the OCR and vision reads agreeing or not, the summary accepted or rejected, and the cost calculation. How accurate a real model's reading is remains unmeasured.
 - Line matching assumes the supplier's SKU equals the ERP item code. Suppliers with their own codes need a SKU mapping table (not built).
 - On scans, the date and PO are not covered by any arithmetic check. A misread PO surfaces as `PO_MISMATCH`, which is safe. A misread date only raises a `DATE_MISMATCH` warning.
 - A duplicate booked under a *different* document number appears as `MISSING_IN_PDF`. It is still flagged, but not labelled as a duplicate.
@@ -190,10 +222,10 @@ The process around it (steps 2–4 are manual today):
 ## With another week
 
 - Evaluate and tune the Groq vision path on real scans; calibrate the confidence thresholds against reviewer decisions.
-- A supplier onboarding wizard: the LLM drafts a profile from sample invoices, followed by golden-file tests and shadow mode before activation (as above).
+- The rest of the onboarding wizard: golden-file tests and shadow mode before a drafted profile is activated (steps 3–4 above); saving a profile from a deployed container needs `config/suppliers/` on a mounted volume.
 - A SKU mapping table with LLM-suggested mappings that a person approves.
 - Read the ERP through its API instead of exports; validate e-Faktur QR codes against DJP (the tax authority); export a payment proposal for approved amounts only.
-- Multi-user review with login, an append-only decision log and a four-eyes rule above an amount threshold. Containerise and run CI.
+- Multi-user review with login, an append-only decision log and a four-eyes rule above an amount threshold.
 
 ## How AI tools were used
 

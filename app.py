@@ -1,30 +1,30 @@
 """Streamlit UI for the AP team: run a batch, work the review queue, audit any figure.
 
-    streamlit run app.py
+    recon ui              (same as: streamlit run app.py)
 """
 from __future__ import annotations
 
-import hashlib
-import io
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-import pymupdf
 import streamlit as st
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw
 
 from recon.config import Config, ConfigError
 from recon.llm import GroqLLM
-from recon.normalize import fmt_idr, fmt_num, fmt_signed
+from recon.normalize import fmt_idr, fmt_signed, norm_vendor
 from recon.pipeline import DEFAULT_CONFIG, run_batch
+from recon.profile_draft import (generate_profile, grouped, llm_documents, recheck, register_supplier, save_profile,
+                                 unknown_layout_pages)
 from recon.reason_codes import STATUSES, status_rank
-from recon.report import (STATUS_FILL, audit_table, checks_table, control_totals_table, documents_table,
-                          extraction_table, erp_load_table, figure_boxes, line_discrepancy_table, reason_code_table,
-                          write_reports)
+from recon.render import render_page
+from recon.report import (STATUS_FILL, audit_table, checks_table, control_totals_table, document_boxes, documents_table,
+                          erp_load_table, extraction_table, figure_boxes, figure_comparison_table,
+                          line_discrepancy_table, line_pairs_table, reason_code_table, write_reports)
 from recon.review import DECISIONS, DecisionLog, batch_id
+from recon.uploads import save_upload
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parent
@@ -36,16 +36,6 @@ st.set_page_config(page_title="AP Reconciliation", page_icon="🧾", layout="wid
 
 # --------------------------------------------------------------------------- helpers
 
-def save_upload(f, folder: Path) -> Path:
-    """Content-addressed, so two different files with the same name never overwrite each other."""
-    data = f.getbuffer()
-    p = folder / hashlib.sha256(data).hexdigest()[:12] / f.name
-    if not p.exists():
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(data)
-    return p
-
-
 def style_status(df: pd.DataFrame):
     def color(v):
         return f"background-color: #{STATUS_FILL[v]}; color: #111" if v in STATUS_FILL else ""
@@ -55,21 +45,8 @@ def style_status(df: pd.DataFrame):
 
 
 @st.cache_data(show_spinner=False)
-def render_page(pdf_path: str, page_no: int, boxes: tuple, dpi: int = 110) -> bytes:
-    """Render a PDF page with highlighted bounding boxes ((x0,y0,x1,y1,color),...)."""
-    doc = pymupdf.open(pdf_path)
-    pix = doc[page_no - 1].get_pixmap(dpi=dpi)
-    img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-    k = dpi / 72
-    over = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    dr = ImageDraw.Draw(over)
-    for x0, y0, x1, y1, color in boxes:
-        rgb = {"red": (220, 38, 38), "blue": (37, 99, 235), "green": (22, 163, 74)}[color]
-        dr.rectangle([x0 * k - 2, y0 * k - 2, x1 * k + 2, y1 * k + 2], outline=rgb + (255,), width=2, fill=rgb + (40,))
-    img = Image.alpha_composite(img.convert("RGBA"), over).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
+def cached_page(pdf_path: str, page_no: int, boxes: tuple) -> bytes:
+    return render_page(pdf_path, page_no, boxes)
 
 
 # --------------------------------------------------------------------------- sidebar
@@ -88,8 +65,8 @@ with st.sidebar:
         upx = st.file_uploader("ERP AP export (.xlsx)", type=["xlsx"])
         if ups and upx:
             tmp = OUT / "uploads" / datetime.now().strftime("%Y%m%d")
-            pdf_paths = [save_upload(f, tmp) for f in ups]
-            erp_path = save_upload(upx, tmp)
+            pdf_paths = [save_upload(f.name, f.getvalue(), tmp) for f in ups]
+            erp_path = save_upload(upx.name, upx.getvalue(), tmp)
 
     try:
         conf = Config.load(DEFAULT_CONFIG)
@@ -105,14 +82,19 @@ with st.sidebar:
     with st.expander("Models"):
         text_model = st.text_input("Text model", conf.llm.text_model)
         vision_model = st.text_input("Vision model", conf.llm.vision_model)
+        fallback_text = st.text_input("Fallback text model (when rate-limited)", conf.llm.fallback_text_model)
+        fallback_vision = st.text_input("Fallback vision model (when rate-limited)", conf.llm.fallback_vision_model)
     run = st.button("Run reconciliation", type="primary", disabled=not (pdf_paths and erp_path), width="stretch")
     st.caption("Arithmetic, matching, statuses and explanations are deterministic code. "
                "The LLM only reads pages and words the summary; its output is re-checked by code.")
 
-if run:
+rerun = st.session_state.pop("rerun_batch", False) and bool(pdf_paths and erp_path)     # after a profile is saved
+if run or rerun:
+    st.session_state.pop("profile_draft", None)
     llm = None
     if key and (use_llm_extract or use_llm_summary):
-        llm = GroqLLM(conf.llm, api_key=key, text_model=text_model, vision_model=vision_model)
+        llm = GroqLLM(conf.llm, api_key=key, text_model=text_model, vision_model=vision_model,
+                      fallback_text_model=fallback_text, fallback_vision_model=fallback_vision)
     bar = st.progress(0.0, "Starting")
     try:
         br = run_batch(pdf_paths, erp_path, conf, llm=llm, llm_extract=use_llm_extract,
@@ -129,6 +111,10 @@ if run:
 
 br = st.session_state.get("br")
 st.title("Supplier invoice ↔ ERP reconciliation")
+if saved := st.session_state.pop("profile_saved", None):
+    st.success(f"Profile saved to `{saved}`, and the batch was read again with it.")
+if registered := st.session_state.pop("supplier_registered", None):
+    st.info(registered)
 if br is None:
     st.info("Choose a batch in the sidebar and press **Run reconciliation**.")
     st.stop()
@@ -144,11 +130,120 @@ def open_for_review(r) -> bool:
     return r.review_required and not (ds and ds.current)
 
 
+def profile_onboarding(unknown: dict):
+    """Pages no supplier profile read: the LLM drafts a profile, code dry-runs it, a person saves it."""
+    st.markdown("#### New layout → supplier profile")
+    fname = st.selectbox("PDF", list(unknown)) if len(unknown) > 1 else next(iter(unknown))
+    pages = unknown[fname]
+    path = st.session_state.pdf_map.get(fname)
+    refs = llm_documents(br.pdf_docs, fname, pages)
+    st.caption(f"{len(pages)} page(s) of {fname} were read without a supplier profile, so their figures have no box on "
+               f"the page. A drafted profile is run through the parser on these pages, compared with the LLM's read "
+               f"({len(refs)} document(s)) and with R1–R4, and is saved only when you confirm.")
+    names = sorted({d.vendor for d in br.erp.documents if d.vendor})
+    read_as = {norm_vendor(d.vendor) for d in refs if d.vendor}
+    erp_names = st.multiselect("Supplier name(s) in the ERP export", names,
+                               default=[n for n in names if norm_vendor(n) in read_as])
+    if st.button("Generate profile", disabled=not (key and erp_names and path),
+                 help=None if key else "Needs a GROQ_API_KEY (sidebar)."):
+        llm = GroqLLM(conf.llm, api_key=key, text_model=text_model, vision_model=vision_model,
+                      fallback_text_model=fallback_text, fallback_vision_model=fallback_vision)
+        with st.spinner("Drafting the profile and running it on the pages"):
+            try:
+                st.session_state.profile_draft = generate_profile(llm, path, pages, list(conf.profiles), refs, erp_names,
+                                                                  conf.rule_config)
+                st.session_state.draft_no = st.session_state.get("draft_no", 0) + 1
+            except Exception as e:
+                st.error(f"Drafting failed: {type(e).__name__}: {e}")
+    draft = st.session_state.get("profile_draft")
+    if draft is None or draft.file != fname:
+        return
+
+    chk = draft.check
+    st.caption("LLM calls: " + "; ".join(f"#{a['attempt']} {a['model']}"
+                                         + (f" (fallback, {a['fallback_from']} rate-limited)" if a.get("fallback_from") else "")
+                                         + ("" if a.get("valid", True) else ": not a valid profile")
+                                         + f": {a['blocking']} blocking, {a['disagreements']} disagreeing, "
+                                         f"{a.get('prompt_tokens', 0):,} in + {a.get('completion_tokens', 0):,} out tokens, "
+                                         f"${a['cost_usd']:.4f}" for a in draft.attempts)
+               + (" · edited by you" if draft.edited else ""))
+    if chk.repairs:
+        st.caption("Corrected by code before checking: " + "; ".join(chk.repairs))
+    if chk.savable and not chk.needs_look:
+        st.success(f"The draft reads all {len(pages)} page(s) and agrees with the LLM on every figure "
+                   f"({len(chk.rows)} compared).")
+    if chk.blocking:
+        blocking = grouped(chk.blocking)          # the same mistake on every document is one line
+        st.error("**Cannot be saved yet**\n\n" + "\n".join(f"- {m}" for m in blocking[:15])
+                 + (f"\n- … and {len(blocking) - 15} more" if len(blocking) > 15 else ""))
+    look = grouped(chk.disagreements + chk.to_check)
+    if look:
+        st.warning("**Look at these on the page before saving**\n\n" + "\n".join(f"- {m}" for m in look[:15])
+                   + (f"\n- … and {len(look) - 15} more" if len(look) > 15 else ""))
+
+    left, right = st.columns([1, 1])
+    with left:
+        rows = pd.DataFrame(chk.rows)
+        if not rows.empty:
+            if st.toggle("Only disagreements", value=bool(chk.disagreements)):
+                rows = rows[rows["Agree"] == "NO"]
+            st.dataframe(rows, hide_index=True, width="stretch", height=420)
+    with right:
+        boxes = document_boxes(chk.docs, chk.red)
+        pg = st.radio("Page", pages, horizontal=True, key="draft_page") if len(pages) > 1 else pages[0]
+        st.caption("Boxes = figures the draft profile reads. Red = the draft and the LLM read disagree.")
+        st.image(cached_page(path, pg, tuple(boxes.get(pg, []))), width="stretch")
+
+    with st.expander("Profile JSON (edit and re-check if needed)", expanded=bool(chk.blocking)):
+        text = st.text_area("Profile", draft.text, height=420, key=f"draft_json_{st.session_state.get('draft_no', 0)}",
+                            label_visibility="collapsed")
+        if st.button("Re-check edited profile"):
+            st.session_state.profile_draft = recheck(draft, text, path, list(conf.profiles), refs, conf.rule_config)
+            st.rerun()
+
+    with st.form("save_profile"):
+        days = conf.rules.new_supplier_review_days
+        st.caption(f"Saving also adds the supplier to `config/supplier_register.json` with today as its go-live date "
+                   f"(unless it is already there): its documents are reviewed by a person for {days} days.")
+        who = st.text_input("Your name", value=st.session_state.get("reviewer", ""))
+        looked = st.checkbox("I compared the flagged figures with the page") if chk.needs_look else True
+        confirm = st.form_submit_button("Confirm and save profile", type="primary", disabled=not chk.savable)
+    if confirm:
+        try:
+            saved = save_profile(draft, conf.dir, who, looked)
+        except (ValueError, FileExistsError, ConfigError) as e:
+            st.error(f"Not saved: {e}")
+        else:
+            st.session_state.profile_saved = str(saved.relative_to(ROOT) if saved.is_relative_to(ROOT) else saved)
+            prof, today = chk.profile, datetime.now().date()
+            assert prof is not None             # save_profile refuses a draft without one
+            try:        # the profile stands without it: an unregistered supplier is reviewed anyway
+                added = register_supplier(conf.dir, [prof.vendor_name, *prof.erp_vendor_names], today)
+            except (OSError, ValueError) as e:
+                st.session_state.supplier_registered = f"Not added to the supplier register ({e}): add it by hand."
+            else:
+                until = today + timedelta(days=conf.rules.new_supplier_review_days)
+                st.session_state.supplier_registered = (
+                    f"{', '.join(added)} added to the supplier register, live from {today:%d %b %Y}: documents dated "
+                    f"before {until:%d %b %Y} are reviewed by a person." if added else
+                    f"{prof.vendor_name} was already in the supplier register; its go-live date is unchanged.")
+            st.session_state.rerun_batch = True
+            st.rerun()
+
+
 # --------------------------------------------------------------------------- tabs
 
+def remember_tab(labels: list[str]):
+    st.session_state.tab_no = labels.index(st.session_state.main_tab)
+
+
+# The tab is kept by position: the queue count in its label changes the widget's identity, which would reset it
+# to Overview after a button press (Generate profile, Save decision) unless the default carries the last choice.
+tab_labels = ["Overview", "Documents", f"Review queue ({sum(1 for r in br.results if open_for_review(r))})",
+              "Audit a document", "Extraction log", "Download"]
 tab_over, tab_docs, tab_queue, tab_audit, tab_extract, tab_dl = st.tabs(
-    ["Overview", "Documents", f"Review queue ({sum(1 for r in br.results if open_for_review(r))})",
-     "Audit a document", "Extraction log", "Download"])
+    tab_labels, default=tab_labels[st.session_state.get("tab_no", 0)], key="main_tab",
+    on_change=remember_tab, args=(tab_labels,))
 
 with tab_over:
     st.subheader(f"{br.supplier_label} · {br.period_label}")
@@ -243,35 +338,11 @@ with tab_audit:
     left, right = st.columns([1, 1])
     with left:
         st.markdown("#### Figures side by side")
-        p = r.pdf_docs[0] if r.pdf_docs else None
-        e = r.erp_docs[0] if r.erp_docs else None
-
-        def src(d, k):
-            f = d.fields.get(k) if d else None
-            return f.src.label().split(" › ")[-1] if f and f.src else ""
-        rows = []
-        for k, lab in (("doc_no", "Document no."), ("doc_date", "Date"), ("po_no", "PO"), ("reference", "Reference"),
-                       ("subtotal", "Subtotal"), ("dpp", "DPP"), ("ppn", "PPN"), ("total", "Total")):
-            pv = getattr(p, k, None) if p else None
-            ev = getattr(e, k, None) if e else None
-            fmt = (lambda v: f"{v:,}") if k in ("subtotal", "dpp", "ppn", "total") else (lambda v: str(v or ""))
-            rows.append({"Field": lab, "PDF": fmt(pv) if pv is not None else "", "PDF source": src(p, k),
-                         "ERP": fmt(ev) if ev is not None else "", "ERP source": src(e, k),
-                         "Match": "" if pv is None or ev is None else ("✓" if (pv == ev or k == "doc_no" and p.key == e.key) else "✗")})
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.dataframe(figure_comparison_table(r), hide_index=True, width="stretch")
         if r.line_pairs:
             st.markdown("#### Lines (matched by item code)")
-            lrows = []
-            for lp in r.line_pairs:
-                a, b = lp.pdf, lp.erp
-                lrows.append({"PDF #": a.line_no if a else None, "ERP #": b.line_no if b else None, "SKU": lp.sku,
-                              "Qty PDF/ERP": f"{fmt_num(a.qty) if a else '—'} / {fmt_num(b.qty) if b else '—'}",
-                              "Price PDF/ERP": f"{fmt_num(a.unit_price) if a else '—'} / {fmt_num(b.unit_price) if b else '—'}",
-                              "Disc PDF/ERP": f"{fmt_num(a.disc_pct) if a else '—'} / {fmt_num(b.disc_pct) if b else '—'}",
-                              "Amount PDF": a.amount if a else None, "Amount ERP": b.amount if b else None,
-                              "Diff": lp.amount_diff, "Issue": ", ".join(lp.diffs) or "✓"})
-            st.dataframe(pd.DataFrame(lrows).style.format({"Amount PDF": "{:,.0f}", "Amount ERP": "{:,.0f}", "Diff": "{:,.0f}"},
-                                                          na_rep=""), hide_index=True, width="stretch")
+            money = {"Amount PDF": "{:,.0f}", "Amount ERP": "{:,.0f}", "Diff": "{:,.0f}"}
+            st.dataframe(line_pairs_table(r).style.format(money, na_rep=""), hide_index=True, width="stretch")
         chk = checks_table(br)
         chk = chk[chk["Document no."] == r.doc_no]
         if not chk.empty:
@@ -290,7 +361,7 @@ with tab_audit:
             st.caption("Blue = extracted figure, red = figure behind a discrepancy. Every figure in the audit "
                        "table below carries its page and box.")
             if path:
-                st.image(render_page(path, pg, tuple(boxes.get(pg, []))), width="stretch")
+                st.image(cached_page(path, pg, tuple(boxes.get(pg, []))), width="stretch")
         else:
             st.info("No supplier document — ERP entry only.")
     st.markdown("#### Audit trail — every figure and where it came from")
@@ -298,6 +369,8 @@ with tab_audit:
 
 with tab_extract:
     st.dataframe(extraction_table(br), hide_index=True, width="stretch")
+    if unknown := unknown_layout_pages(br.page_logs):
+        profile_onboarding(unknown)
     st.markdown("#### ERP export as read")
     st.dataframe(erp_load_table(br), hide_index=True, width="stretch")
     with st.expander("Reason codes (the status policy)"):

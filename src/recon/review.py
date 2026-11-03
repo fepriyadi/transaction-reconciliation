@@ -75,7 +75,8 @@ class DecisionLog:
     def __init__(self, batch_dir: Path):
         self.dir = Path(batch_dir)
         self.path = self.dir / "decisions.jsonl"
-        self._legacy = self.dir / "decisions.json"      # earlier format {key: {...}}: read until the first new decision copies it into the log
+        # earlier format {key: {...}}: read until the first new decision copies it into the log
+        self._legacy = self.dir / "decisions.json"
 
     def records(self) -> list[Decision]:
         if self.path.exists():

@@ -65,7 +65,7 @@ def ocr_words(page, dpi: int = OCR_DPI, median: Optional[int] = None) -> list[Wo
     from PIL import Image, ImageFilter
 
     pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY)
-    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    img: Image.Image = Image.open(io.BytesIO(pix.tobytes("png")))
     if median:
         img = img.filter(ImageFilter.MedianFilter(median))   # removes scanner speckle
     data = pytesseract.image_to_data(img, config="--psm 6", output_type=pytesseract.Output.DICT)
