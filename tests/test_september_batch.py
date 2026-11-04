@@ -1,5 +1,6 @@
 """End-to-end regression on the September 2026 sample (deterministic path, no LLM)."""
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -74,3 +75,32 @@ def test_reports_written(batch, tmp_path):
             "Suggested action"} <= set(docs.columns)
     lines = pd.read_csv(paths["lines_csv"])
     assert set(lines["Document no."]) == {"PKI/INV/2026/09/0144", "PKI/INV/2026/09/0145", "PKI/INV/2026/09/0151"}
+
+
+# ERP_AP_Export_Sep2026_corrected.xlsx: the same export after AP fixed the ERP-side errors above
+# (0144, 0145, 0151 lines, 0147 duplicate and 0155 parked entry removed, 0154 PO, 0152 amount as a number).
+# What is left is not the ERP's to fix: 0146 still to be booked, 0148/0149 errors on the supplier's PDF.
+CORRECTED_CHANGES = {
+    "PKI/INV/2026/09/0144": ("MATCHED", 0),
+    "PKI/INV/2026/09/0145": ("MATCHED", 0),
+    "PKI/INV/2026/09/0147": ("MATCHED", 0),
+    "PKI/INV/2026/09/0151": ("MATCHED", 0),
+    "PKI/INV/2026/09/0154": ("MATCHED", 0),
+}
+
+
+@pytest.fixture(scope="module")
+def corrected_batch():
+    from recon.pipeline import run_batch
+    root = Path(__file__).resolve().parent.parent
+    return run_batch([root / "data/Supplier_Invoices_PT_Prima_Kertas_Sep2026.pdf"],
+                     root / "data/ERP_AP_Export_Sep2026_corrected.xlsx", root / "config", llm=None)
+
+
+def test_corrected_erp_leaves_only_what_the_erp_cannot_fix(corrected_batch):
+    expected = {k: v for k, v in EXPECTED.items() if k != "PKI/INV/2026/09/0155"} | CORRECTED_CHANGES
+    assert {r.doc_no: (r.status, r.difference) for r in corrected_batch.results} == expected
+    t = corrected_batch.totals
+    assert (t.pdf_total, t.erp_total) == (307_896_675, 291_892_206)
+    assert t.difference == 15_688_629 + 204_841 + 111_000 - 1
+    assert t.unexplained == 0 and t.fully_explained
