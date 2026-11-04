@@ -68,6 +68,7 @@ def test_reports_written(batch, tmp_path):
     paths = write_reports(batch, tmp_path)
     import pandas as pd
     docs = pd.read_csv(paths["documents_csv"])
+    assert paths["documents_csv"].name == "document_report.csv"       # not reconciliation_report.*, the Excel's name
     assert len(docs) == 16
     assert {"PDF total", "ERP total", "Difference (PDF-ERP)", "Status", "Reason codes", "Explanation",
             "Suggested action"} <= set(docs.columns)

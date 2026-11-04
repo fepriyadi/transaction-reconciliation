@@ -296,7 +296,7 @@ def write_reports(br, out_dir: Path, decisions: dict | None = None) -> dict:
     audit = audit_table(br).drop(columns=["Page", "BBox"], errors="ignore")
     paths = {
         "excel": out_dir / "reconciliation_report.xlsx",
-        "documents_csv": out_dir / "reconciliation_report.csv",
+        "documents_csv": out_dir / "document_report.csv",
         "lines_csv": out_dir / "line_discrepancies.csv",
         "audit_csv": out_dir / "audit_trail.csv",
         "summary_txt": out_dir / "customer_summary.txt",

@@ -42,6 +42,7 @@ Each item has a ready action, for example "reverse duplicate entry E-10460 befor
 ## What it cannot do yet
 
 - Two supplier layouts are set up: Prima Kertas, fully tested, and the sample October layout, confirmed from one batch only. Every other supplier needs the guided setup once. Its documents are held for review in its first month, and the system enforces this.
+- Each supplier can have only one invoice layout. If a supplier mixes two different templates, for example an old and a new design, the pages in the second template are not read correctly. They are not lost: they come up in the review queue, usually as a page that could not be read with its ERP booking shown as missing from the PDF, so a person checks and keys them in. A single PDF that contains several different suppliers is fine.
 - It assumes the supplier uses your ERP item codes. Suppliers with their own codes need a code-mapping table.
 - Very poor scans need the AI reading option switched on, or manual entry.
 - Approvals are saved locally. There are no user logins or two-person sign-off yet.

@@ -41,7 +41,7 @@ docker run --rm -p 8501:8501 --env-file .env -v "$PWD/output:/app/output" recon
 Outputs in `--out`:
 
 - `reconciliation_report.xlsx` with these sheets: Summary, Documents, Line_Discrepancies, Control_Totals, Bridge_by_Document, Arithmetic_Checks, Audit_Trail, Extraction_Log, ERP_Load, Reason_Codes (the status policy: severity, forced status and whether each code blocks auto-approval)
-- the same core tables as CSV
+- the same core tables as CSV: `document_report.csv` (the Documents sheet), `line_discrepancies.csv`, `audit_trail.csv`
 - `customer_summary.txt`
 
 ## September results
@@ -212,6 +212,7 @@ Worked example: `config/suppliers/sagara_digital_supply.json` was drafted this w
 ## Known limitations
 
 - Two supplier profiles exist. Only `prima_kertas.json` has golden-file tests and the evaluation suites. `sagara_digital_supply.json` was drafted by the LLM and confirmed in the UI from one dummy batch, with no golden-file test yet. Other layouts depend on the LLM path. The LLM path has been used live for profile drafting and summaries, but its extraction accuracy has not been evaluated. Tests with a fake LLM (`tests/test_llm_path.py`) cover what the pipeline does with the replies: a page read correctly, a reply in the wrong shape, a call that fails, the OCR and vision reads agreeing or not, the summary accepted or rejected, and the cost calculation. How accurate a real model's reading is remains unmeasured.
+- One layout per supplier. A page is matched to a profile by its `detect` text (the supplier's name), and the first matching profile wins (`detect_profile` in `src/recon/extract/profile_parser.py`). If a supplier sends pages in two different templates, for example old and new, in the same PDF or across batches, a second profile with the same `detect` text is never chosen. Pages in the other template are parsed with the wrong layout, and the LLM fallback does not step in because a profile did match. Nothing is dropped silently: a page that yields no document number becomes an `EXTRACTION_FAILED` row (NEEDS_REVIEW), and its ERP entry shows as `MISSING_IN_PDF`. Different suppliers' layouts in one PDF are supported, since the profile is chosen page by page.
 - Line matching assumes the supplier's SKU equals the ERP item code. Suppliers with their own codes need a SKU mapping table (not built).
 - On scans, the date and PO are not covered by any arithmetic check. A misread PO surfaces as `PO_MISMATCH`, which is safe. A misread date only raises a `DATE_MISMATCH` warning.
 - A duplicate booked under a *different* document number appears as `MISSING_IN_PDF`. It is still flagged, but not labelled as a duplicate.
@@ -223,6 +224,7 @@ Worked example: `config/suppliers/sagara_digital_supply.json` was drafted this w
 
 - Evaluate and tune the Groq vision path on real scans; calibrate the confidence thresholds against reviewer decisions.
 - The rest of the onboarding wizard: golden-file tests and shadow mode before a drafted profile is activated (steps 3–4 above); saving a profile from a deployed container needs `config/suppliers/` on a mounted volume.
+- Several templates per supplier: when more than one profile matches the supplier's name, choose the one whose own labels (document-number label, table headers, total labels) appear on the page.
 - A SKU mapping table with LLM-suggested mappings that a person approves.
 - Read the ERP through its API instead of exports; validate e-Faktur QR codes against DJP (the tax authority); export a payment proposal for approved amounts only.
 - Multi-user review with login, an append-only decision log and a four-eyes rule above an amount threshold.
